@@ -33,11 +33,14 @@ so, delete this exception statement from your version.
 /* -- macosx_opengl.c -- */
 
 #if (defined(__MACH__) && defined(__APPLE__))
-
 #include <CoreFoundation/CoreFoundation.h>
 #include <ApplicationServices/ApplicationServices.h>
+#include <Cocoa/Cocoa.h>
+#include <Carbon/Carbon.h>
 
 #include "config.h"
+#include "macosx_opengl.h"
+
 #include <rfb/rfb.h>
 #if HAVE_MACOSX_OPENGL_H
 #include <OpenGL/OpenGL.h>
@@ -53,125 +56,145 @@ int macosx_opengl_width = 0;
 int macosx_opengl_height = 0;
 int macosx_opengl_bpp = 0;
 
-int macosx_opengl_get_width(void) {
-	GLint viewport[4];
+static NSMutableData *frameBufferData = nil;
+static size_t frameBufferBytesPerRow;
+static size_t frameBufferBitsPerPixel;
 
-	glGetIntegerv(GL_VIEWPORT, viewport);
-	return (int) viewport[2];
+int macosx_opengl_get_width(void)
+{
+	return CGDisplayPixelsWide(displayID);
 }
 
-int macosx_opengl_get_height(void) {
-	GLint viewport[4];
-
-	glGetIntegerv(GL_VIEWPORT, viewport);
-	return (int) viewport[3];
+int macosx_opengl_get_height(void)
+{
+	return CGDisplayPixelsHigh(displayID);
 }
 
-int macosx_opengl_get_bpp(void) {
+int macosx_opengl_get_bpp(void)
+{
 	return 32;
 }
 
-int macosx_opengl_get_bps(void) {
+int macosx_opengl_get_bps(void)
+{
 	return 8;
 }
 
-int macosx_opengl_get_spp(void) {
+int macosx_opengl_get_spp(void)
+{
 	return 3;
 }
 
-void macosx_opengl_init(void) {
-	CGLPixelFormatObj pixelFormatObj;
-	GLint numPixelFormats;
-	CGLPixelFormatAttribute attribs[] = {
-		kCGLPFAFullScreen,
-		kCGLPFADisplayMask,
-		0,
-		0
-	};
-
-	if (macosx_no_opengl) {
-		return;
-	}
-
-	attribs[2] = CGDisplayIDToOpenGLDisplayMask(displayID);
-
-	CGLChoosePixelFormat(attribs, &pixelFormatObj, &numPixelFormats);
-	if (pixelFormatObj == NULL) {
-		rfbLog("macosx_opengl_init: CGLChoosePixelFormat failed. Not using OpenGL.\n");
-		return;
-	}
-
-	CGLCreateContext(pixelFormatObj, NULL, &glContextObj);
-	CGLDestroyPixelFormat(pixelFormatObj);
-
-	if (glContextObj == NULL) {
-		rfbLog("macosx_opengl_init: CGLCreateContext failed. Not using OpenGL.\n");
-		return;
-	}
-
-	CGLSetCurrentContext(glContextObj);
-	CGLSetFullScreen(glContextObj);
-
-	macosx_opengl_width  = macosx_opengl_get_width();
+void macosx_opengl_init(void)
+{
+	macosx_opengl_width = macosx_opengl_get_width();
 	macosx_opengl_height = macosx_opengl_get_height();
-
 	macosx_opengl_bpp = macosx_opengl_get_bpp();
 
-	glFinish();
+	if (floor(NSAppKitVersionNumber) > floor(NSAppKitVersionNumber10_6))
+	{
+		if (!frameBufferData)
+		{
+			CGImageRef imageRef;
+			if (2 > 1.0)
+			{
+				// Retina display.
+				size_t width = macosx_opengl_get_width();
+				size_t height = macosx_opengl_get_height();
+				CGImageRef image = CGDisplayCreateImage(displayID);
+				CGColorSpaceRef colorspace = CGColorSpaceCreateWithName(kCGColorSpaceGenericRGB);
+				CGContextRef context = CGBitmapContextCreate(NULL, width, height,
+															 CGImageGetBitsPerComponent(image),
+															 CGImageGetBytesPerRow(image),
+															 colorspace,
+															 kCGImageAlphaNoneSkipLast);
 
-	glPixelStorei(GL_PACK_ALIGNMENT, 4);
-	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-	glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+				CGColorSpaceRelease(colorspace);
+				if (context == NULL)
+				{
+					rfbLog("There was an error getting screen shot");
+					return;
+				}
+				CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+				imageRef = CGBitmapContextCreateImage(context);
+				CGContextRelease(context);
+				CGImageRelease(image);
+			}
+			else
+			{
+				imageRef = CGDisplayCreateImage(displayID);
+			}
+			CGDataProviderRef dataProvider = CGImageGetDataProvider(imageRef);
+			CFDataRef dataRef = CGDataProviderCopyData(dataProvider);
+			frameBufferBytesPerRow = CGImageGetBytesPerRow(imageRef);
+			frameBufferBitsPerPixel = CGImageGetBitsPerPixel(imageRef);
+			frameBufferData = [(NSData *)dataRef mutableCopy];
+			CFRelease(dataRef);
 
-	rfbLog("macosx_opengl_init: Using OpenGL for screen capture.\n");
+			if (imageRef != NULL)
+				CGImageRelease(imageRef);
+		}
+	}
+
 	macosx_read_opengl = 1;
 }
 
-void macosx_opengl_fini(void) {
-	if (!macosx_read_opengl) {
-		return;
-	}
-	CGLSetCurrentContext(NULL);
-	CGLClearDrawable(glContextObj);
-	CGLDestroyContext(glContextObj);
+void macosx_opengl_fini(void)
+{
+	
 }
 
-void macosx_copy_opengl(char *dest, int x, int y, unsigned int w, unsigned int h) {
-	int yflip = macosx_opengl_height - y - h; 
-
-	CGLSetCurrentContext(glContextObj);
-
-	glReadPixels((GLint) x, (GLint) yflip, (int) w, (int) h,
-	    GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, dest);
-
-	if (h > 1) {
-		static char *pbuf = NULL;
-		static int buflen = 0;
-		int top = 0, bot = h - 1, rowlen = w * macosx_opengl_bpp/8;
-		char *ptop, *pbot;
-
-		if (rowlen > buflen || buflen == 0)  {
-			buflen = rowlen + 128;
-			if (pbuf) {
-				free(pbuf);
+void macosx_copy_opengl(char *dest, int x, int y, unsigned int w, unsigned int h)
+{
+	if (frameBufferData)
+	{
+		CGRect rect = CGRectMake(x, y, w, h);
+		CGImageRef imageRef;
+		if (2 > 1.0)
+		{
+			// Retina display.
+			CGImageRef image = CGDisplayCreateImageForRect(displayID, rect);
+			CGColorSpaceRef colorspace = CGColorSpaceCreateDeviceRGB();
+			CGBitmapInfo bitmapInfo = kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst;
+			CGContextRef context = CGBitmapContextCreate(NULL, w, h, 8, w * 4, colorspace, bitmapInfo);
+			CGColorSpaceRelease(colorspace);
+			if (context == NULL)
+			{
+				rfbLog("There was an error getting scaled images");
 			}
-			pbuf = (char *) malloc(buflen);
+			CGContextDrawImage(context, CGRectMake(0, 0, w, h), image);
+			CGImageRelease(image);
+			imageRef = CGBitmapContextCreateImage(context);
+			CGContextRelease(context);
 		}
-		while (top < bot) {
-			ptop = dest + top * rowlen;
-			pbot = dest + bot * rowlen;
-			memcpy(pbuf, ptop, rowlen);
-			memcpy(ptop, pbot, rowlen);
-			memcpy(pbot, pbuf, rowlen);
-			top++;
-			bot--;
+		else
+		{
+			imageRef = CGDisplayCreateImageForRect(displayID, rect);
 		}
+
+		CGDataProviderRef dataProvider = CGImageGetDataProvider(imageRef);
+		CFDataRef dataRef = CGDataProviderCopyData(dataProvider);
+		size_t imgBytesPerRow = CGImageGetBytesPerRow(imageRef);
+		size_t imgBitsPerPixel = CGImageGetBitsPerPixel(imageRef);
+		if (imgBitsPerPixel != frameBufferBitsPerPixel)
+		{
+			NSLog(@"BitsPerPixel MISMATCH: frameBuffer %zu, rect image %zu", frameBufferBitsPerPixel, imgBitsPerPixel);
+		}
+		const char *source = ((NSData *)dataRef).bytes;
+
+		if (h > 0) {
+			//int data_size = w * macosx_opengl_bpp / 8 * h;
+			int data_size = w * frameBufferBitsPerPixel / 8 * h;
+			memcpy(dest, source, data_size);
+		}
+
+
+		if (imageRef != NULL)
+			CGImageRelease(imageRef);
+		[(id)dataRef release];
 	}
 }
-
 
 #else
 
-#endif	/* __APPLE__ */
-
+#endif /* __APPLE__ */

@@ -57,6 +57,4 @@ extern void macosxCG_keycode_inject(int down, int keycode);
 extern void macosxCG_refresh_callback_off(void);
 extern void macosxCG_refresh_callback_on(void);
 
-
-
 #endif /* _X11VNC_MACOSXCG_H */

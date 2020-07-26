@@ -452,7 +452,11 @@ void initialize_polling_images(void) {
 	 */
 	if (UT.sysname && strstr(UT.sysname, "Linux")) {
 		set_fs_factor(10 * MB);
-	} else {
+	} 
+	else if (UT.sysname && strstr(UT.sysname, "Darwin")) {
+		set_fs_factor(20 * MB);
+	}
+	else {
 		set_fs_factor(1 * MB);
 	}
 	if (fs_frac >= 1.0) {

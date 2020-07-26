@@ -32,10 +32,8 @@ so, delete this exception statement from your version.
 
 #ifndef _X11VNC_MACOSX_OPENGL_H
 #define _X11VNC_MACOSX_OPENGL_H
-
 /* -- macosx_opengl.h -- */
 
 extern void macosx_opengl_init(void);
-
 
 #endif /* _X11VNC_MACOSX_OPENGL_H */
